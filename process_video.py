@@ -1,205 +1,160 @@
 import numpy as np
 import cv2
 import os
+import sys
+import shutil
 from glob import glob
-import time
 
 # -------- Parameters --------
-NUM_VIEWS = 60
-RADIUS = 3.0
-CAMERA_HEIGHT = 1.5
-BASE_OVERLAY_SIZE = 64
-FPS = 30
-BUFFER_DURATION = 1.0
+NUM_VIEWS = 60           # 추출할 프레임 수
+UPSCALE_FACTOR = 2       # 해상도 높이기 비율
+RADIUS = 3.0             # 카메라 궤도 반경
+CAMERA_HEIGHT = 1      # 카메라 높이
+BASE_OVERLAY_SIZE = 512   # 객체 오버레이 기본 사이즈
+FPS = 30                 # 출력 비디오 fps
+BUFFER_DURATION = 1.0    # 시작/끝 버퍼 지속 시간(초)
+BG_PATH = "grass.jpg"  # 바닥 텍스처 이미지 경로
+BG_Y = 0.0               # 바닥 평면의 y 좌표 (unused for static background)
+OUTPUT_PATH = "camera_orbit_multiobject_upscaled.mp4"
 
-BG_PATH = "grass.jpg"  # Background image path
-BG_Y = 1.0
 
-OUTPUT_PATH = "camera_orbit_multiobject.mp4"
-HLEN = 100
+def extract_frames(video_path, out_folder, max_frames, scale_factor):
+    """
+    비디오에서 프레임을 추출한 뒤 해상도 업스케일, PNG 저장 및 리스트 반환
+    """
+    if os.path.exists(out_folder):
+        shutil.rmtree(out_folder)
+    os.makedirs(out_folder)
+    cap = cv2.VideoCapture(video_path)
+    frames = []
+    for i in range(max_frames):
+        ret, frame = cap.read()
+        if not ret:
+            print(f"[Warning] {video_path}에서 {i}번째 프레임을 읽을 수 없습니다.")
+            break
+        # 해상도 업스케일링
+        h, w = frame.shape[:2]
+        new_size = (int(w * scale_factor), int(h * scale_factor))
+        frame = cv2.resize(frame, new_size, interpolation=cv2.INTER_CUBIC)
+        # PNG로 저장
+        fname = os.path.join(out_folder, f"frame_{i:04d}.png")
+        cv2.imwrite(fname, frame)
+        frames.append(frame)
+    cap.release()
+    return frames
 
-# Each object: (folder_name, 3D_position)
-OBJECTS_INFO = [
-    ("object-videos/objectA_views", np.array([0.0, 0.0, 0.0])),   # Object A (center)
-    ("object-videos/objectB_views", np.array([1.0, 0.0, 0.0])),   # Object B
-]
 
-# -------- Load images --------
-def load_images_from_folder(folder, max_images=None):
-    paths = sorted(glob(os.path.join(folder, '*.png')))
-    if max_images:
-        paths = paths[:max_images]
-    images = [cv2.imread(p) for p in paths]
-    return images
-
-# -------- Camera orbit poses --------
-def generate_orbit_camera_poses(radius=2.0, num_views=60, height=0.5):
+def generate_orbit_camera_poses(radius, num_views, height):
     poses = []
     for theta in np.linspace(0, 2 * np.pi, num_views, endpoint=False):
         x = radius * np.cos(theta)
         z = radius * np.sin(theta)
         y = height
-        camera_position = np.array([x, y, z])
+        cam_pos = np.array([x, y, z])
         target = np.array([0, 0, 0])
-        forward = (target - camera_position)
+        forward = (target - cam_pos)
         forward /= np.linalg.norm(forward)
         up = np.array([0, 1, 0])
         right = np.cross(up, forward)
         up = np.cross(forward, right)
         R = np.stack([right, up, forward], axis=1)
-        T = -R.T @ camera_position
-        extrinsic = np.concatenate([R.T, T.reshape(3, 1)], axis=1)
+        T = -R.T @ cam_pos
+        extrinsic = np.concatenate([R.T, T.reshape(3,1)], axis=1)
         poses.append(extrinsic)
     return poses
 
-# -------- Project 3D point --------
+
 def project_point(K, extrinsic, point3D):
-    point_cam = extrinsic[:, :3] @ point3D + extrinsic[:, 3]
-    if point_cam[2] <= 0:
+    pc = extrinsic[:,:3] @ point3D + extrinsic[:,3]
+    if pc[2] <= 0:
         return None
-    point_proj = K @ point_cam
-    return (point_proj[:2] / point_proj[2]).astype(int)
+    p  = K @ pc
+    return (p[:2]/p[2]).astype(int)
 
-# -------- Scale image based on distance --------
-def get_scaled_overlay(image, distance, base_distance, base_size):
-    scale = base_distance / distance
-    size = int(base_size * scale)
-    size = max(8, min(size, 512))
-    return cv2.resize(image, (size, size)), size
 
-# -------- Main --------
+def get_scaled_overlay(img, dist, base_dist, base_size):
+    # 객체 크기에 업스케일 팩터 추가 반영
+    scale = base_dist / dist
+    sz = int(base_size * scale * UPSCALE_FACTOR)
+    sz = max(8, min(sz, 512 * UPSCALE_FACTOR))
+    return cv2.resize(img, (sz,sz)), sz
+
+
+def remove_background_white(img):
+    # 흰색 배경 제거 (threshold 기반)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    lower = np.array([0,0,200])
+    upper = np.array([180,30,255])
+    mask = cv2.inRange(hsv, lower, upper)
+    mask_inv = cv2.bitwise_not(mask)
+    fg = cv2.bitwise_and(img, img, mask=mask_inv)
+    return fg
+
+
 def main():
-    # Load all objects
-    objects = []
-    for folder, position in OBJECTS_INFO:
-        images = load_images_from_folder(folder, NUM_VIEWS)
-        if len(images) != NUM_VIEWS:
-            raise ValueError(f"Folder {folder} must contain exactly {NUM_VIEWS} images.")
-        objects.append({
-            "folder": folder,
-            "position": position,
-            "images": images
-        })
+    if len(sys.argv) != 3:
+        print("사용법: python script.py <video1_path> <video2_path>")
+        sys.exit(1)
+    vid1, vid2 = sys.argv[1], sys.argv[2]
 
-    # Get resolution from first image
-    IMG_SIZE = (objects[0]['images'][0].shape[1], objects[0]['images'][0].shape[0])  # (width, height)
+    # 1) 프레임 추출 및 업스케일
+    frames1 = extract_frames(vid1, 'frames1', NUM_VIEWS, UPSCALE_FACTOR)
+    frames2 = extract_frames(vid2, 'frames2', NUM_VIEWS, UPSCALE_FACTOR)
+    if len(frames1) != NUM_VIEWS or len(frames2) != NUM_VIEWS:
+        raise RuntimeError("두 비디오 모두 정확히 NUM_VIEWS개의 프레임을 가져와야 합니다.")
 
+    # 2) 객체 정보 설정 (y 높이는 BG_Y)
+    objects = [
+        { 'position': np.array([0.0, BG_Y, 0.0]), 'images': frames1 },
+        { 'position': np.array([1.0, BG_Y, 0.0]), 'images': frames2 }
+    ]
+
+    # 3) 배경 로드 및 업스케일 (static)
+    h0, w0 = frames1[0].shape[:2]
     if not os.path.exists(BG_PATH):
-        raise FileNotFoundError(f"Background image not found: {BG_PATH}")
-    else:
-        background = cv2.imread(BG_PATH)
-        background = cv2.resize(background, (IMG_SIZE[0], IMG_SIZE[1]))
-        if background is None:
-            raise ValueError(f"Failed to load background image: {BG_PATH}")
+        raise FileNotFoundError(f"Background not found: {BG_PATH}")
+    bg = cv2.imread(BG_PATH)
+    bg = cv2.resize(bg, (w0, h0), interpolation=cv2.INTER_CUBIC)
 
-    # Camera intrinsics
-    focal_length = 0.7 * IMG_SIZE[0]
-    K = np.array([
-        [focal_length, 0, IMG_SIZE[0] / 2],
-        [0, focal_length, IMG_SIZE[1] / 2],
-        [0, 0, 1]
-    ])
+    # 4) 카메라 내부 파라미터
+    focal = 0.7 * w0
+    K = np.array([[focal,0,w0/2],[0,focal,h0/2],[0,0,1]])
 
-    orbit_poses = generate_orbit_camera_poses(RADIUS, NUM_VIEWS, CAMERA_HEIGHT)
-    frames = []
+    # 5) 궤도 카메라 포즈 생성
+    poses = generate_orbit_camera_poses(RADIUS, NUM_VIEWS, CAMERA_HEIGHT)
+    out_frames = []
 
-    # For background warping
-    pts_bg_w = np.array([
-        [ HLEN, BG_Y,  HLEN],
-        [ HLEN, BG_Y, -HLEN],
-        [-HLEN, BG_Y, -HLEN],
-        [-HLEN, BG_Y,  HLEN],
-    ], dtype=np.float32)
-    h, w = IMG_SIZE[1], IMG_SIZE[0]
-
-    for i in range(NUM_VIEWS):
-        pose = orbit_poses[i]
-        frame = np.zeros((IMG_SIZE[1], IMG_SIZE[0], 3), dtype=np.uint8)
-        camera_position = -pose[:, :3].T @ pose[:, 3]
-        
+    # 6) 각 뷰별 렌더링
+    for i, pose in enumerate(poses):
+        frame = bg.copy()
         render_list = []
-
-        ### Background warping ###
-
-        pts_bg_warped = []
-
-        # src: [TL, BL, TR, BR]
-        pts_bg_src = np.array([
-            [0, 0],
-            [w-1, 0],
-            [w-1, h-1],
-            [0, h-1],
-        ], dtype=int)
-
-        dst = []
-        for pt in pts_bg_w:
-            pc = pose[:, :3] @ pt + pose[:, 3]
-            p  = K @ pc
-            uv = (p[:2] / p[2]).astype(int)
-            uv = np.clip(uv, [0,0], [w-1, h-1])
-            dst.append(uv)
-        dst = np.stack(dst, axis=0)  # shape (4,2)
-
-        tops = dst[np.argsort(dst[:, 1])][:2]
-        bottoms = dst[np.argsort(dst[:, 1])][2:]
-
-        tops = tops[np.argsort(tops[:, 0])]
-        bottoms = bottoms[np.argsort(bottoms[:, 0])[::-1]]
-
-        pts_bg_warped = np.concatenate([tops, bottoms])
-
-        M_warp = cv2.getPerspectiveTransform(pts_bg_src.astype(np.float32), pts_bg_warped.astype(np.float32))
-        bg_warped = cv2.warpPerspective(background, M_warp, (w, h))
-        
-        frame = bg_warped.copy()
-
-        cv2.imshow("Background", bg_warped)
-        cv2.waitKey(1)
-
-        ### Backward warping ###
-
+        cam_pos = -pose[:,:3].T @ pose[:,3]
         for obj in objects:
-            obj_pos = obj["position"]
-            obj_image = obj["images"][i]
-            dist = np.linalg.norm(obj_pos - camera_position)
-            point2D = project_point(K, pose, obj_pos)
+            p3d = obj['position']; img3d = obj['images'][i]
+            # 배경 제거
+            img_nobg = remove_background_white(img3d)
+            dist = np.linalg.norm(p3d - cam_pos)
+            p2d = project_point(K, pose, p3d)
+            if p2d is not None:
+                overlay, sz = get_scaled_overlay(img_nobg, dist, 1.0, BASE_OVERLAY_SIZE)
+                x, y = p2d - sz//2
+                if 0 <= x <= w0-sz and 0 <= y <= h0-sz:
+                    render_list.append((dist, overlay, sz, x, y))
+        for _, ov, sz, x, y in sorted(render_list, reverse=True, key=lambda x: x[0]):
+            roi = frame[y:y+sz, x:x+sz]
+            frame[y:y+sz, x:x+sz] = cv2.addWeighted(roi, 0.3, ov, 0.7, 0)
+        out_frames.append(frame)
 
-            if point2D is not None:
-                REFERENCE_DISTANCE = 1.0  # constant, like a camera 1m away
-                overlay_img, overlay_size = get_scaled_overlay(obj_image, dist, REFERENCE_DISTANCE, BASE_OVERLAY_SIZE)
-                x, y = point2D
-                x -= overlay_size // 2
-                y -= overlay_size // 2
+    # 7) 버퍼 프레임 추가
+    buf = int(FPS*BUFFER_DURATION)
+    out_frames = [out_frames[0]]*buf + out_frames + [out_frames[-1]]*buf
 
-                if 0 <= x < IMG_SIZE[0] - overlay_size and 0 <= y < IMG_SIZE[1] - overlay_size:
-                    render_list.append((dist, overlay_img, overlay_size, x, y))
-
-        # Sort by distance (far → near)
-        render_list.sort(reverse=True, key=lambda item: item[0])
-
-        # Composite in correct order
-        for _, overlay_img, overlay_size, x, y in render_list:
-            roi = frame[y:y + overlay_size, x:x + overlay_size]
-            frame[y:y + overlay_size, x:x + overlay_size] = cv2.addWeighted(
-                roi, 0.3, overlay_img, 0.7, 0
-            )
-
-        frames.append(frame)
-
-    # -------- Add start/end buffer --------
-    buffer_frame_count = int(FPS * BUFFER_DURATION)
-    frames = (
-        [frames[0]] * buffer_frame_count +
-        frames +
-        [frames[-1]] * buffer_frame_count
-    )
-
-    # -------- Write video --------
-    out = cv2.VideoWriter(OUTPUT_PATH, cv2.VideoWriter_fourcc(*'mp4v'), FPS, IMG_SIZE)
-    for frame in frames:
-        out.write(frame)
-    out.release()
-    print(f"✅ Video saved to {OUTPUT_PATH}")
+    # 8) 비디오 작성
+    writer = cv2.VideoWriter(OUTPUT_PATH, cv2.VideoWriter_fourcc(*'mp4v'), FPS, (w0,h0))
+    for f in out_frames:
+        writer.write(f)
+    writer.release()
+    print(f"✅ Saved merged & upscaled video to {OUTPUT_PATH}")
 
 if __name__ == "__main__":
     main()
