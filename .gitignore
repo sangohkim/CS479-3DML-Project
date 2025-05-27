@@ -1,3 +1,7 @@
+.DS_Store
+animate-124/
+*.mp4
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

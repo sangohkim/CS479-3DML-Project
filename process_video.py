@@ -13,7 +13,7 @@ FPS = 30
 BUFFER_DURATION = 1.0
 
 BG_PATH = "grass.jpg"  # Background image path
-BG_Y = 0
+BG_Y = 1.0
 
 OUTPUT_PATH = "camera_orbit_multiobject.mp4"
 HLEN = 100
