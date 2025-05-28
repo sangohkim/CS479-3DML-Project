@@ -10,34 +10,36 @@ from carvekit.api.high import HiInterface
 # -------- Parameters --------
 NUM_VIEWS = 60           # 추출할 프레임 수
 UPSCALE_FACTOR = 2       # 해상도 업스케일 비율
-RADIUS = 15.0            # 카메라 궤도 반경
-CAMERA_HEIGHT = 5     # 카메라 높이 (world y)
-BASE_OVERLAY_SIZE = 512   # 객체 오버레이 기본 사이즈
+RADIUS = 16.0            # 카메라 궤도 반경
+CAMERA_HEIGHT = 5        # 카메라 높이 (world y)
+BASE_OVERLAY_SIZE = 512  # 객체 오버레이 기본 사이즈
 FPS = 30                 # 출력 비디오 fps
 BUFFER_DURATION = 1.0    # 시작/끝 버퍼 지속 시간(초)
-BG_PATH = "grass.jpg"   # 바닥 텍스처 이미지 경로
-BG_Y = 0               # 바닥 평면의 y 좌표
-BG_LEN = 8.0
+BG_PATH = "grass.jpg"  # 바닥 텍스처 이미지 경로
+BG_Y = 0                 # 바닥 평면의 y 좌표
+BG_LEN = 6.0
 OUTPUT_PATH = "camera_orbit_multiobject_upscaled.mp4"
 
 
 def extract_frames(video_path, out_folder, max_frames, scale_factor):
-    interface = HiInterface(object_type="object",  # Can be "object" or "hairs-like".
-                            batch_size_seg=5,
-                            batch_size_matting=1,
-                            device='cuda' if torch.cuda.is_available() else 'cpu',
-                            seg_mask_size=640,  # Use 640 for Tracer B7 and 320 for U2Net
-                            matting_mask_size=2048,
-                            trimap_prob_threshold=231,
-                            trimap_dilation=30,
-                            trimap_erosion_iters=5,
-                            fp16=False)
-    
+    # interface = HiInterface(
+    #     object_type="object",
+    #     batch_size_seg=5,
+    #     batch_size_matting=1,
+    #     device='cuda' if torch.cuda.is_available() else 'cpu',
+    #     seg_mask_size=640,
+    #     matting_mask_size=2048,
+    #     trimap_prob_threshold=231,
+    #     trimap_dilation=30,
+    #     trimap_erosion_iters=5,
+    #     fp16=False
+    # )
+    # 기존 폴더 삭제
     if os.path.exists(out_folder): shutil.rmtree(out_folder)
     os.makedirs(out_folder)
     cap = cv2.VideoCapture(video_path)
-    frames = []
     frame_paths = []
+    frames = []
     for i in range(max_frames):
         ret, frame = cap.read()
         if not ret:
@@ -51,34 +53,46 @@ def extract_frames(video_path, out_folder, max_frames, scale_factor):
         cv2.imwrite(frame_path, frame)
         frames.append(frame)
     cap.release()
-    frames_wo_bg = interface(frame_paths)
-    frames = []
-    for i, frame_wo_bg in enumerate(frames_wo_bg):
-        if frame_wo_bg is not None:
-            frame_wo_bg.save(frame_paths[i])
-            frames.append(cv2.imread(frame_paths[i]))
+
+    return frames  #, frame_paths
+
+    # 배경 제거
+    # frames_wo_bg = interface(frame_paths)
+    # cleaned = []
+    # for i, frame_wo_bg in enumerate(frames_wo_bg):
+    #     if frame_wo_bg is not None:
+    #         frame_wo_bg.save(frame_paths[i])
+    #         cleaned.append(cv2.imread(frame_paths[i], cv2.IMREAD_COLOR))
+    #     else:
+    #         raise RuntimeError(f"Frame {i} segmentation failed.")
+    # return cleaned
+
+
+def load_images_from_dir(dir_path, max_frames):
+    imgs = []
+    paths = sorted(glob(os.path.join(dir_path, "*.png")))
+    if len(paths) < max_frames:
+        print(f"[Warning] Directory {dir_path} has only {len(paths)} images (requested {max_frames}).")
+    for p in paths[:max_frames]:
+        img = cv2.imread(p, cv2.IMREAD_COLOR)
+        if img is None:
+            print(f"[Warning] Failed to load image {p}.")
         else:
-            print(f"[Warning] {video_path} frame {i} segmentation failed.")
-            raise RuntimeError(f"Frame {i} segmentation failed.")
-    return frames
+            imgs.append(img)
+    return imgs
 
 
 def generate_orbit_camera_poses(radius, num_views, height):
     poses = []
     for theta in np.linspace(0, 2*np.pi, num_views, endpoint=False):
-        # 카메라 위치
         x = radius * np.cos(theta)
         z = radius * np.sin(theta)
         C = np.array([x, height, z])
-        # 바라볼 대상
         target = np.array([0.0, 0.0, 0.0])
-        forward = (target - C)
-        forward /= np.linalg.norm(forward)
+        forward = (target - C); forward /= np.linalg.norm(forward)
         up_vec = np.array([0.0, 1.0, 0.0])
-        right = np.cross(up_vec, forward)
-        right /= np.linalg.norm(right)
+        right = np.cross(up_vec, forward); right /= np.linalg.norm(right)
         up = np.cross(forward, right)
-        # world->camera rotation and translation
         R_cam = np.stack([right, up, forward], axis=1).T
         t_cam = -R_cam @ C
         extrinsic = np.concatenate([R_cam, t_cam.reshape(3,1)], axis=1)
@@ -88,8 +102,6 @@ def generate_orbit_camera_poses(radius, num_views, height):
 
 def project_point(K, extrinsic, point3D):
     pc = extrinsic[:,:3] @ point3D + extrinsic[:,3]
-    # if pc[2] <= 0:
-    #     return None
     proj = K @ pc
     return (proj[:2]/proj[2]).astype(np.int32)
 
@@ -101,142 +113,80 @@ def get_scaled_overlay(img, dist, base_dist, base_size):
 
 
 def compute_ground_homography(K, extrinsic, bg_size, w, h):
-    # 바닥 평면의 4개 모서리 점 정의 (큰 영역)
     ground_points = np.array([
-        [-bg_size, BG_Y, -bg_size],  # 좌상단
-        [bg_size, BG_Y, -bg_size],   # 우상단  
-        [bg_size, BG_Y, bg_size],    # 우하단
-        [-bg_size, BG_Y, bg_size]    # 좌하단
+        [-bg_size, BG_Y, -bg_size], [bg_size, BG_Y, -bg_size],
+        [bg_size, BG_Y, bg_size],    [-bg_size, BG_Y, bg_size]
     ])
-    
-    # 이미지 평면으로 투영
     image_points = []
-    visible_points = []
-    for i, pt in enumerate(ground_points):
-        proj = project_point(K, extrinsic, pt)
-        if proj is not None:
-            image_points.append(proj)
-            visible_points.append(i)
-        else:
-            # 카메라 뒤에 있는 점 처리
-            image_points.append(None)
-    
-    # 모든 점이 카메라 뒤에 있는 경우
-    if len(visible_points) < 2:
-        raise RuntimeError("Not enough visible points to compute homography.")
-    
-    # # 카메라 뒤에 있는 점들에 대한 추정
-    # if len(visible_points) == 4:
-    #     image_points = sorted(image_points, key=lambda x: (x[1], x[0]))  # y좌표로 정렬
-    # elif len(visible_points) == 3:
-    #     print("This case.")
-        
-    # elif len(visible_points) == 2:
-    #     image_points = sorted(image_points, key=lambda x: (x[0], x[1]))  # y좌표로 정렬
-    #     image_points = image_points + [[0, h], [w, h]]  # 나머지 두 점은 바닥의 오른쪽 아래 모서리로 채움
-    image_points = sorted(image_points, key=lambda x: (x[1], x[0]))  # y좌표로 정렬
-    
-    # 점들 배열로 변환
+    for pt in ground_points:
+        image_points.append(project_point(K, extrinsic, pt))
+    image_points = sorted(image_points, key=lambda x: (x[1], x[0]))
     image_points = np.array(image_points, dtype=np.float32)
-    
-    # 좌표 정렬 (왼쪽 위부터 시계방향)
-    tl = image_points[0]
-    tr = image_points[1]
-    bl = image_points[2]
-    br = image_points[3]
-    
-    # 목표 이미지 모서리 점
-    dst_points = np.array([
-        [0, 0], [w, 0], [w, h], [0, h]
-    ], dtype=np.float32)
-    
-    # 호모그래피 계산
+    tl, tr, bl, br = image_points
+    dst_points = np.array([[0,0],[w,0],[w,h],[0,h]], dtype=np.float32)
     src_points = np.array([tl, tr, br, bl], dtype=np.float32)
     try:
-        H = cv2.getPerspectiveTransform(dst_points, src_points)
-        return H
+        return cv2.getPerspectiveTransform(dst_points, src_points)
     except:
-        print("[Warning] Failed to compute homography. Using fallback method.")
-        
-        # 대안적 방법: 단순 어파인 변환 (3점만 필요)
-        if len(visible_points) >= 3:
-            visible_src = np.array([image_points[i] for i in visible_points[:3]], dtype=np.float32)
-            visible_dst = np.array([dst_points[i] for i in visible_points[:3]], dtype=np.float32)
-            M = cv2.getAffineTransform(visible_dst, visible_src)
-            # 3x3 호모그래피 형태로 변환
-            H = np.vstack([M, [0, 0, 1]])
+        if len(image_points) >= 3:
+            M = cv2.getAffineTransform(dst_points[:3], src_points[:3])
+            H = np.vstack([M, [0,0,1]])
             return H
-        
         return None
 
 
 def main():
     if len(sys.argv) != 3:
-        print("Usage: python script.py <video1> <video2>")
+        print("Usage: python script.py <video_or_dir1> <video_or_dir2>")
         sys.exit(1)
-    vid1, vid2 = sys.argv[1], sys.argv[2]
+    inputs = sys.argv[1:]
+    frames_list = []
+    for inp in inputs:
+        if os.path.isdir(inp):
+            frames = load_images_from_dir(inp, NUM_VIEWS)
+        else:
+            folder = f"frames_{os.path.splitext(os.path.basename(inp))[0]}"
+            frames = extract_frames(inp, folder, NUM_VIEWS, UPSCALE_FACTOR)
+        if len(frames) < NUM_VIEWS:
+            raise RuntimeError(f"Not enough frames loaded for {inp}.")
+        frames_list.append(frames)
 
-    # 프레임 추출 및 업스케일
-    frames1 = extract_frames(vid1, 'frames1', NUM_VIEWS, UPSCALE_FACTOR)
-    frames2 = extract_frames(vid2, 'frames2', NUM_VIEWS, UPSCALE_FACTOR)
-
-    # 객체 설정 (y=BG_Y in xz-plane)
+    frames1, frames2 = frames_list
     objects = [
         {'position': np.array([0.0, BG_Y, 0.0]), 'images': frames1},
         {'position': np.array([2.0, BG_Y, 0.0]), 'images': frames2}
     ]
 
-    # 배경 로드 및 업스케일
     h0, w0 = frames1[0].shape[:2]
-    bg = cv2.imread(BG_PATH)
+    bg = cv2.imread(BG_PATH, cv2.IMREAD_COLOR)
     bg = cv2.resize(bg, (w0, h0), interpolation=cv2.INTER_CUBIC)
 
-    # 카메라 내부 파라미터
     focal = 0.7 * w0
     K = np.array([[focal,0,w0/2],[0,focal,h0/2],[0,0,1]])
-
-    # 궤도 포즈 생성
     poses = generate_orbit_camera_poses(RADIUS, NUM_VIEWS, CAMERA_HEIGHT)
     out_frames = []
-
-    # 각 뷰 렌더링
     for extrinsic, C in poses:
-        H = compute_ground_homography(K, extrinsic, BG_LEN, *frames1[0].shape[:2])  # 바닥 크기
-    
-        if H is not None:
-            bg_warped = cv2.warpPerspective(bg, H, (w0, h0))
-        else:
-            # 호모그래피 계산 실패시 기본 배경 사용
-            raise RuntimeError("Failed to compute homography for background warping.")
-            bg_warped = cv2.resize(bg, (w0, h0))
-
-        frame = bg_warped.copy()
-        frame = cv2.flip(frame, -1)
-
-        # 객체 합성
+        H = compute_ground_homography(K, extrinsic, BG_LEN, w0, h0)
+        if H is None:
+            raise RuntimeError("Failed to compute homography.")
+        bg_warped = cv2.warpPerspective(bg, H, (w0, h0))
+        frame = cv2.flip(bg_warped.copy(), -1)
         render_list = []
         for obj in objects:
-            p3d = obj['position']; img3d = obj['images'][len(out_frames)]
-            dist = np.linalg.norm(C - p3d)
-            p2d = project_point(K, extrinsic, p3d)
+            dist = np.linalg.norm(C - obj['position'])
+            p2d = project_point(K, extrinsic, obj['position'])
             if p2d is not None:
-                overlay, sz = get_scaled_overlay(img3d, dist, 1.0, BASE_OVERLAY_SIZE)
-                x,y = p2d - sz//2
-                if 0<=x<=w0-sz and 0<=y<=h0-sz:
+                overlay, sz = get_scaled_overlay(obj['images'][len(out_frames)], dist, 1.0, BASE_OVERLAY_SIZE)
+                x, y = p2d - sz//2
+                if 0 <= x <= w0-sz and 0 <= y <= h0-sz:
                     render_list.append((dist, overlay, sz, x, y))
-            else:
-                # print(f"[Warning] Object at {p3d} not visible in view {len(out_frames)}")
-                ...
-        for _, ov, sz, x, y in sorted(render_list, reverse=True, key=lambda x: x[0]):
+        for _, ov, sz, x, y in sorted(render_list, key=lambda x: x[0], reverse=True):
             roi = frame[y:y+sz, x:x+sz]
             frame[y:y+sz, x:x+sz] = cv2.addWeighted(roi,0.3,ov,0.7,0)
         out_frames.append(frame)
 
-    # 버퍼 프레임
-    buf = int(FPS*BUFFER_DURATION)
-    frames_buf = [out_frames[0]]*buf + out_frames + [out_frames[-1]]*buf
-
-    # 비디오 작성
+    buf = int(FPS * BUFFER_DURATION)
+    frames_buf = [out_frames[0]] * buf + out_frames + [out_frames[-1]] * buf
     writer = cv2.VideoWriter(OUTPUT_PATH, cv2.VideoWriter_fourcc(*'mp4v'), FPS, (w0, h0))
     for f in frames_buf:
         writer.write(f)
