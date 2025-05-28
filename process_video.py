@@ -197,7 +197,7 @@ def main():
     # --- 여기서 객체별 base_overlay_size 지정 ---
     objects = [
         {'position': np.array([0.0, BG_Y, 0.0]), 'images': frames1, 'base_overlay_size': 1024},
-        {'position': np.array([5.0, BG_Y, 0.0]), 'images': frames2, 'base_overlay_size': 1024},
+        {'position': np.array([1.0, BG_Y, 2.0]), 'images': frames2, 'base_overlay_size': 512},
         {'position': np.array([-5.0, BG_Y, 5.0]), 'images': frames3, 'base_overlay_size': 512},
     ]
 
@@ -223,7 +223,7 @@ def main():
         if H is None:
             raise RuntimeError("Failed to compute homography.")
         bg_warped = cv2.warpPerspective(bg, H, (w0, h0))
-        frame = cv2.flip(bg_warped, -1)
+        frame = bg_warped.copy()
 
         render_list = []
         for obj in objects:
@@ -242,18 +242,21 @@ def main():
 
         # alpha blending
         for _, ov, sz, x, y in sorted(render_list, key=lambda x: x[0], reverse=True):
-            overlay_rgb = ov[:, :, :3].astype(float)
+            overlay_rgb = cv2.flip(ov[:, :, :3].astype(float), -1)
             try:
                 alpha_mask = ov[:, :, 3].astype(float) / 255.0
             except IndexError:
                 alpha_mask = np.ones((sz, sz), dtype=float)
-            alpha = cv2.merge([alpha_mask]*3)
+            alpha = cv2.flip(cv2.merge([alpha_mask]*3), -1)
 
             roi = frame[y:y+sz, x:x+sz].astype(float)
             blended = (alpha * overlay_rgb + (1 - alpha) * roi).astype(np.uint8)
             frame[y:y+sz, x:x+sz] = blended
 
         out_frames.append(frame)
+
+    for i in range(len(out_frames)):
+        out_frames[i] = cv2.flip(out_frames[i], -1)  # Flip vertically
 
     buf = int(FPS * BUFFER_DURATION)
     frames_buf = [out_frames[0]] * buf + out_frames + [out_frames[-1]] * buf
