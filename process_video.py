@@ -17,13 +17,13 @@ from carvekit.trimap.generator import TrimapGenerator
 # -------- Parameters --------
 NUM_VIEWS = 124                # 추출할 프레임 수
 # 프레임을 직접 리사이즈할 목표 해상도 (width, height). None 이면 리사이즈 안 함
-FRAME_RESIZE = (640, 640)
+FRAME_RESIZE = (1024, 1024)  # None or (width, height)
 
 # 오브젝트 오버레이 크기 조절 인자 (거리 감쇠용)
 UPSCALE_FACTOR = 3            
 RADIUS = 14.0                 # 카메라 궤도 반경
 CAMERA_HEIGHT = 5             # 카메라 높이 (world y)
-BASE_OVERLAY_SIZE = 1024      # 객체 오버레이 기본 사이즈
+BASE_OVERLAY_SIZE = 2048      # 객체 오버레이 기본 사이즈
 
 FPS = 30                      # 출력 비디오 fps
 BUFFER_DURATION = 1.0         # 시작/끝 버퍼 지속 시간(초)
@@ -32,7 +32,7 @@ BG_PATH = "grass.jpg"         # 바닥 텍스처 이미지 경로
 BG_Y = 0                      # 바닥 평면의 y 좌표
 BG_LEN = 6.0
 
-ENABLE_BG_CUT = False
+ENABLE_BG_CUT = True
 
 OUTPUT_PATH = "camera_orbit_multiobject_upscaled.mp4"
 
@@ -75,31 +75,80 @@ def extract_frames(video_path, out_folder, max_frames):
         if any(f is None for f in frames):
             raise RuntimeError("Failed to load some frames.")
         return frames
+    
+    vpath, vname = os.path.split(video_path)
+    normal_path = os.path.join(vpath, vname[:-4].replace('test', 'test-normal'))
+    if not os.path.exists(normal_path):
+        raise RuntimeError(f"Normal map directory {normal_path} does not exist.")
+    
+    normal_paths = sorted(glob(os.path.join(normal_path, "*.png")))
+    normal_paths.sort(key=lambda p: int(os.path.splitext(os.path.basename(p))[0]))  # prevent lexicographic sort
 
-    # 배경 제거 → RGBA PNG
-    frames_wo_bg = interface(frame_paths)
+    if len(normal_paths) != len(frame_paths):
+        raise RuntimeError(f"Not enough normal maps found in {normal_path}.")
+    print(f"Found {len(normal_paths)} normal maps in {normal_path}.")
+
     cleaned = []
-    for i, frame_wo_bg in enumerate(frames_wo_bg):
-        if frame_wo_bg is None:
-            raise RuntimeError(f"Frame {i} segmentation failed.")
-        frame_wo_bg.save(frame_paths[i])
-        img = cv2.imread(frame_paths[i], cv2.IMREAD_UNCHANGED)  # BGRA 채널 유지
-        if img is None:
-            raise RuntimeError(f"Frame {i} load failed after segmentation.")
+    for i, frame_path in enumerate(frame_paths):
+        normal_img = cv2.imread(normal_paths[i], cv2.IMREAD_UNCHANGED)
+        img = cv2.imread(frame_path, cv2.IMREAD_UNCHANGED)
+        if img is None or normal_img is None:
+            raise RuntimeError(f"Frame {i} or normal map {i} load failed.")
+        
+        # 이미지에 알파 채널이 없다면 추가 (기본값 255 = 완전 불투명)
+        if img.shape[2] == 3:  # BGR 이미지
+            b, g, r = cv2.split(img)
+            alpha = np.ones(b.shape, dtype=b.dtype) * 255
+            img = cv2.merge((b, g, r, alpha))
+        
+        # normal_map에서 검은색(또는 거의 검은색)인 픽셀 찾기
+        # BGR 이미지이므로 모든 채널이 임계값(예: 10) 이하인 픽셀을 검은색으로 간주
+        black_mask = np.all(normal_img[:, :, :3] < 10, axis=2)
+        
+        # 검은색 픽셀 위치의 알파값을 0으로 설정
+        img[black_mask, 3] = 0
+        
+        # 수정된 이미지 저장
+        cv2.imwrite(frame_path, img)
         cleaned.append(img)
     return cleaned
 
 
 def load_images_from_dir(dir_path, max_frames):
+    parent_dir, img_path = os.path.split(dir_path)
+    normal_path = os.path.join(parent_dir, img_path.replace('test', 'test-normal'))
+    if not os.path.exists(normal_path):
+        raise RuntimeError(f"Normal map directory {normal_path} does not exist.")
+    
+    normal_paths = sorted(glob(os.path.join(normal_path, "*.png")))
+    normal_paths.sort(key=lambda p: int(os.path.splitext(os.path.basename(p))[0]))  # prevent lexicographic sort
+
+    if len(normal_paths) < max_frames:
+        raise RuntimeError(f"Not enough normal maps found in {normal_path}.")
+    print(f"Found {len(normal_paths)} normal maps in {normal_path}.")
+
     imgs = []
+
     paths = sorted(glob(os.path.join(dir_path, "*.png")))
+    paths.sort(key=lambda p: int(os.path.splitext(os.path.basename(p))[0]))  # prevent lexicographic sort
+
     if len(paths) < max_frames:
         print(f"[Warning] Directory {dir_path} has only {len(paths)} images (requested {max_frames}).")
-    for p in paths[:max_frames]:
+    for i, p in enumerate(paths[:max_frames]):
         img = cv2.imread(p, cv2.IMREAD_UNCHANGED)  # BGRA 채널 유지
-        if img is None:
+        normal_img = cv2.imread(normal_paths[i], cv2.IMREAD_UNCHANGED)
+        if img is None or normal_img is None:
             print(f"[Warning] Failed to load image {p}.")
         else:
+            # 이미지에 알파 채널이 없다면 추가 (기본값 255 = 완전 불투명)
+            if img.shape[2] == 3:
+                b, g, r = cv2.split(img)
+                alpha = np.ones(b.shape, dtype=b.dtype) * 255
+                img = cv2.merge((b, g, r, alpha))
+            # normal_map에서 검은색(또는 거의 검은색)인 픽셀 찾기
+            black_mask = np.all(normal_img[:, :, :3] < 10, axis=2)
+            # 검은색 픽셀 위치의 알파값을 0으로 설정
+            img[black_mask, 3] = 0
             imgs.append(img)
     return imgs
 
@@ -173,8 +222,12 @@ def main():
     frames1, frames2 = frames_list
     objects = [
         {'position': np.array([0.0, BG_Y, 0.0]), 'images': frames1},
-        {'position': np.array([2.0, BG_Y, 0.0]), 'images': frames2}
+        # {'position': np.array([2.0, BG_Y, 0.0]), 'images': frames2}
     ]
+
+    if FRAME_RESIZE is not None:
+        frames1 = [cv2.resize(f, FRAME_RESIZE, interpolation=cv2.INTER_CUBIC) for f in frames1]
+        frames2 = [cv2.resize(f, FRAME_RESIZE, interpolation=cv2.INTER_CUBIC) for f in frames2]
 
     h0, w0 = frames1[0].shape[:2]
     bg = cv2.imread(BG_PATH, cv2.IMREAD_COLOR)
