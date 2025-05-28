@@ -15,21 +15,27 @@ from carvekit.pipelines.preprocessing import PreprocessingStub
 from carvekit.trimap.generator import TrimapGenerator
 
 # -------- Parameters --------
-NUM_VIEWS = 124                # 추출할 프레임 수
+NUM_VIEWS = 60                # 추출할 프레임 수
 FRAME_RESIZE = (1024, 1024)    # None 이면 리사이즈 안 함
 
 UPSCALE_FACTOR = 3             # 거리 감쇠용 인자
-RADIUS = 13.0                  # 카메라 궤도 반경
-CAMERA_HEIGHT = 5              # 카메라 높이 (world y)
+RADIUS = 8.0                  # 카메라 궤도 반경
+CAMERA_HEIGHT = 4              # 카메라 높이 (world y)
 FPS = 30                       # 출력 비디오 fps
 BUFFER_DURATION = 1.0          # 시작/끝 버퍼 지속 시간(초)
 
 BG_PATH = "grass.jpg"          # 바닥 텍스처 이미지 경로
 BG_Y = 0                       # 바닥 평면의 y 좌표
-BG_LEN = 6.0
+BG_LEN = 4.0
 
 ENABLE_BG_CUT = True
 OUTPUT_PATH = "camera_orbit_multiobject_upscaled.mp4"
+
+
+def get_refined_list(lst):
+    L = [lst[10]] + lst[16:30] + [lst[30]] + lst[47:61] + [lst[62]] + lst[78:92] + [lst[92]] + lst[109:123]
+    L.reverse()
+    return L
 
 
 def extract_frames(video_path, out_folder, max_frames):
@@ -60,6 +66,9 @@ def extract_frames(video_path, out_folder, max_frames):
         frame_paths.append(frame_path)
     cap.release()
 
+    frame_paths.sort(key=lambda p: int(os.path.splitext(os.path.basename(p))[0].split('_')[1]))
+    frame_paths = get_refined_list(frame_paths)
+
     if not ENABLE_BG_CUT:
         frames = [cv2.imread(p, cv2.IMREAD_UNCHANGED) for p in frame_paths]
         if any(f is None for f in frames):
@@ -73,6 +82,8 @@ def extract_frames(video_path, out_folder, max_frames):
         raise RuntimeError(f"Normal map directory {normal_path} does not exist.")
     normal_paths = sorted(glob(os.path.join(normal_path, "*.png")))
     normal_paths.sort(key=lambda p: int(os.path.splitext(os.path.basename(p))[0]))
+
+    normal_paths = get_refined_list(normal_paths)
 
     if len(normal_paths) != len(frame_paths):
         raise RuntimeError(f"Not enough normal maps found in {normal_path}.")
@@ -104,9 +115,11 @@ def load_images_from_dir(dir_path, max_frames):
         raise RuntimeError(f"Normal map directory {normal_path} does not exist.")
     normal_paths = sorted(glob(os.path.join(normal_path, "*.png")))
     normal_paths.sort(key=lambda p: int(os.path.splitext(os.path.basename(p))[0]))
+    normal_paths = get_refined_list(normal_paths)
 
     paths = sorted(glob(os.path.join(dir_path, "*.png")))
     paths.sort(key=lambda p: int(os.path.splitext(os.path.basename(p))[0]))
+    paths = get_refined_list(paths)
     if len(paths) < max_frames:
         print(f"[Warning] Directory {dir_path} has only {len(paths)} images (requested {max_frames}).")
 
@@ -130,8 +143,8 @@ def load_images_from_dir(dir_path, max_frames):
 def generate_orbit_camera_poses(radius, num_views, height):
     poses = []
     for theta in np.linspace(0, 2*np.pi, num_views, endpoint=False):
-        x = radius * np.cos(theta)
-        z = radius * np.sin(theta)
+        x = radius * np.cos(-theta)
+        z = radius * np.sin(-theta)
         C = np.array([x, height, z])
         forward = (np.array([0.,0.,0.]) - C)
         forward /= np.linalg.norm(forward)
@@ -150,10 +163,11 @@ def project_point(K, extrinsic, point3D):
     return (proj[:2] / proj[2]).astype(np.int32)
 
 
-def get_scaled_overlay(img, dist, base_dist, base_size):
-    sz = int(base_size * (base_dist / dist) * UPSCALE_FACTOR)
-    sz = max(8, min(sz, 512 * UPSCALE_FACTOR))
-    return cv2.resize(img, (sz, sz), interpolation=cv2.INTER_CUBIC), sz
+def get_scaled_overlay(image, distance, base_distance, base_size):
+    scale = base_distance / distance
+    size = int(base_size * scale)
+    size = max(8, min(size, 512))
+    return cv2.resize(image, (size, size)), size
 
 
 def compute_ground_homography(K, extrinsic, bg_size, w, h):
@@ -192,19 +206,21 @@ def main():
             raise RuntimeError(f"Not enough frames loaded for {inp}.")
         frames_list.append(frames)
 
-    frames1, frames2, frames3 = frames_list
+    frames1, frames2, frames3, frames4 = frames_list
 
     # --- 여기서 객체별 base_overlay_size 지정 ---
     objects = [
         {'position': np.array([0.0, BG_Y, 0.0]), 'images': frames1, 'base_overlay_size': 1024},
-        {'position': np.array([5.0, BG_Y, 0.0]), 'images': frames2, 'base_overlay_size': 1024},
-        {'position': np.array([-5.0, BG_Y, 5.0]), 'images': frames3, 'base_overlay_size': 512},
+        {'position': np.array([0.5, BG_Y, 0.5]), 'images': frames2, 'base_overlay_size': 1024},
+        {'position': np.array([-3.0, BG_Y, -3.0]), 'images': frames3, 'base_overlay_size': 2048},
+        {'position': np.array([0.5, BG_Y, 1.0]), 'images': frames4, 'base_overlay_size': 512},
     ]
 
     if FRAME_RESIZE is not None:
         frames1 = [cv2.resize(f, FRAME_RESIZE, interpolation=cv2.INTER_CUBIC) for f in frames1]
         frames2 = [cv2.resize(f, FRAME_RESIZE, interpolation=cv2.INTER_CUBIC) for f in frames2]
         frames3 = [cv2.resize(f, FRAME_RESIZE, interpolation=cv2.INTER_CUBIC) for f in frames3]
+        frames4 = [cv2.resize(f, FRAME_RESIZE, interpolation=cv2.INTER_CUBIC) for f in frames3]
 
     h0, w0 = frames1[0].shape[:2]
     bg = cv2.imread(BG_PATH, cv2.IMREAD_COLOR)
@@ -227,13 +243,15 @@ def main():
 
         render_list = []
         for obj in objects:
+            # 회전된 위치 사용
             dist = np.linalg.norm(C - obj['position'])
             p2d = project_point(K, extrinsic, obj['position'])
-            # 객체별로 지정한 base_overlay_size 사용
+            
+            # 나머지 코드는 동일하게 유지
             overlay, sz = get_scaled_overlay(
                 obj['images'][idx],
                 dist,
-                base_dist=1.0,
+                1.0,
                 base_size=obj['base_overlay_size']
             )
             x, y = p2d - sz // 2
