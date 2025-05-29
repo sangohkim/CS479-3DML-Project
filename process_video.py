@@ -17,16 +17,17 @@ from carvekit.trimap.generator import TrimapGenerator
 # -------- Parameters --------
 NUM_VIEWS = 60                # 추출할 프레임 수
 FRAME_RESIZE = (1024, 1024)    # None 이면 리사이즈 안 함
+VIDEO_SIZE = (800, 800)
 
 UPSCALE_FACTOR = 3             # 거리 감쇠용 인자
-RADIUS = 8.0                  # 카메라 궤도 반경
-CAMERA_HEIGHT = 4              # 카메라 높이 (world y)
+RADIUS = 10.0                  # 카메라 궤도 반경
+CAMERA_HEIGHT = 5              # 카메라 높이 (world y)
 FPS = 30                       # 출력 비디오 fps
 BUFFER_DURATION = 1.0          # 시작/끝 버퍼 지속 시간(초)
 
 BG_PATH = "grass.jpg"          # 바닥 텍스처 이미지 경로
 BG_Y = 0                       # 바닥 평면의 y 좌표
-BG_LEN = 4.0
+BG_LEN = 6
 
 ENABLE_BG_CUT = True
 OUTPUT_PATH = "camera_orbit_multiobject_upscaled.mp4"
@@ -210,19 +211,21 @@ def main():
 
     # --- 여기서 객체별 base_overlay_size 지정 ---
     objects = [
-        {'position': np.array([0.0, BG_Y, 0.0]), 'images': frames1, 'base_overlay_size': 1024},
-        {'position': np.array([0.5, BG_Y, 0.5]), 'images': frames2, 'base_overlay_size': 1024},
-        {'position': np.array([-3.0, BG_Y, -3.0]), 'images': frames3, 'base_overlay_size': 2048},
-        {'position': np.array([0.5, BG_Y, 1.0]), 'images': frames4, 'base_overlay_size': 512},
+        {'position': np.array([0.0, BG_Y, 0.0]), 'images': frames1, 'base_overlay_size': 1024, 'frame_size': (1024, 1024)},
+        {'position': np.array([0.0, BG_Y, 1.3]), 'images': frames2, 'base_overlay_size': 1024, 'frame_size': (512, 512)},
+        {'position': np.array([-1.5, BG_Y, -1.5]), 'images': frames3, 'base_overlay_size': 1024, 'frame_size': (5096, 5096)},
+        {'position': np.array([0.5, BG_Y, 0.5]), 'images': frames4, 'base_overlay_size': 1024, 'frame_size': (512, 512)},
     ]
 
-    if FRAME_RESIZE is not None:
-        frames1 = [cv2.resize(f, FRAME_RESIZE, interpolation=cv2.INTER_CUBIC) for f in frames1]
-        frames2 = [cv2.resize(f, FRAME_RESIZE, interpolation=cv2.INTER_CUBIC) for f in frames2]
-        frames3 = [cv2.resize(f, FRAME_RESIZE, interpolation=cv2.INTER_CUBIC) for f in frames3]
-        frames4 = [cv2.resize(f, FRAME_RESIZE, interpolation=cv2.INTER_CUBIC) for f in frames3]
+    for obj in objects:
+        for i in range(len(obj['images'])):
+            obj['images'][i] = cv2.resize(
+                obj['images'][i],
+                obj['frame_size'],
+                interpolation=cv2.INTER_CUBIC
+            )
 
-    h0, w0 = frames1[0].shape[:2]
+    h0, w0 = VIDEO_SIZE
     bg = cv2.imread(BG_PATH, cv2.IMREAD_COLOR)
     bg = cv2.resize(bg, (w0, h0), interpolation=cv2.INTER_CUBIC)
 
@@ -252,7 +255,7 @@ def main():
                 obj['images'][idx],
                 dist,
                 1.0,
-                base_size=obj['base_overlay_size']
+                base_size=obj['frame_size'][0]  # base_overlay_size
             )
             x, y = p2d - sz // 2
             if 0 <= x <= w0 - sz and 0 <= y <= h0 - sz:
