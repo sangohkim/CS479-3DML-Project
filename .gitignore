@@ -1,7 +1,7 @@
 .DS_Store
 animate-124/
-*.mp4
 frame*
+*frames/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
