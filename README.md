@@ -128,4 +128,21 @@ Refer to [README.md](threestudio/custom/threestudio-animate124/README.md), but m
 - Stage 2 (VRAM 43GB, 300min)
 - Stage 3 (VRAM 46GB, 160min)
 
-## Writeup
+## 3D Scene Reconstruction
+After reconstructing, execute (We already have precomputed file. Change the directory in this shell script if you want to replace it to your owns)
+```
+bash process_video.sh
+```
+Then
+```
+bash process_data.sh
+```
+Then
+```
+bash train_splatfacto.sh
+```
+Then
+```
+bash render_scene.sh
+```
+
