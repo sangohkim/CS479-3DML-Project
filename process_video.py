@@ -123,7 +123,8 @@ def main():
             frames = load_images_from_dir(inp, NUM_VIEWS)
         else:
             folder = f"frames_{i}"
-            frames = extract_frames(inp, folder, NUM_VIEWS)
+            # frames = extract_frames(inp, folder, NUM_VIEWS)
+            raise NotImplementedError()
         if len(frames) < NUM_VIEWS:
             raise RuntimeError(f"Not enough frames loaded for {inp}.")
         frames_list.append(frames)

@@ -2,6 +2,8 @@
 animate-124/
 *.mp4
 frame*
+*frames/
+data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
