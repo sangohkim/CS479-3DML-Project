@@ -7,13 +7,6 @@ from glob import glob
 import torch
 from tqdm import tqdm
 
-from carvekit.api.interface import Interface
-from carvekit.ml.wrap.fba_matting import FBAMatting
-from carvekit.ml.wrap.tracer_b7 import TracerUniversalB7
-from carvekit.pipelines.postprocessing import MattingMethod
-from carvekit.pipelines.preprocessing import PreprocessingStub
-from carvekit.trimap.generator import TrimapGenerator
-
 # -------- Parameters --------
 NUM_VIEWS = 60                # 추출할 프레임 수
 FRAME_RESIZE = (1024, 1024)    # None 이면 리사이즈 안 함
@@ -36,77 +29,6 @@ def get_refined_list(lst):
     L = [lst[10]] + lst[16:30] + [lst[30]] + lst[47:61] + [lst[70]] + lst[78:92] + [lst[92]] + lst[109:123]
     L.reverse()
     return L
-
-
-def extract_frames(video_path, out_folder, max_frames):
-    if ENABLE_BG_CUT:
-        seg_net = TracerUniversalB7(device='cpu', batch_size=1)
-        fba = FBAMatting(device='cpu', input_tensor_size=2048, batch_size=1)
-        trimap = TrimapGenerator()
-        preprocessing = PreprocessingStub()
-        postprocessing = MattingMethod(matting_module=fba, trimap_generator=trimap, device='cpu')
-        interface = Interface(pre_pipe=preprocessing, post_pipe=None, seg_pipe=seg_net)
-
-    if os.path.exists(out_folder):
-        shutil.rmtree(out_folder)
-    os.makedirs(out_folder, exist_ok=True)
-    print(f"Extracting frames from {video_path} to {out_folder}...")
-
-    cap = cv2.VideoCapture(video_path)
-    frame_paths = []
-    for i in range(max_frames):
-        ret, frame = cap.read()
-        if not ret:
-            print(f"[Warning] {video_path} frame {i} unreadable.")
-            break
-        if FRAME_RESIZE is not None:
-            frame = cv2.resize(frame, FRAME_RESIZE, interpolation=cv2.INTER_CUBIC)
-        frame_path = os.path.join(out_folder, f"frame_{i:04d}.png")
-        cv2.imwrite(frame_path, frame)
-        frame_paths.append(frame_path)
-    cap.release()
-
-    frame_paths.sort(key=lambda p: int(os.path.splitext(os.path.basename(p))[0].split('_')[1]))
-    frame_paths = get_refined_list(frame_paths)
-
-    if not ENABLE_BG_CUT:
-        frames = [cv2.imread(p, cv2.IMREAD_UNCHANGED) for p in frame_paths]
-        if any(f is None for f in frames):
-            raise RuntimeError("Failed to load some frames.")
-        return frames
-
-    # normal map 경로 유추
-    vpath, vname = os.path.split(video_path)
-    normal_path = os.path.join(vpath, vname[:-4].replace('test', 'test-normal'))
-    if not os.path.exists(normal_path):
-        raise RuntimeError(f"Normal map directory {normal_path} does not exist.")
-    normal_paths = sorted(glob(os.path.join(normal_path, "*.png")))
-    normal_paths.sort(key=lambda p: int(os.path.splitext(os.path.basename(p))[0]))
-
-    normal_paths = get_refined_list(normal_paths)
-
-    if len(normal_paths) != len(frame_paths):
-        raise RuntimeError(f"Not enough normal maps found in {normal_path}.")
-    print(f"Found {len(normal_paths)} normal maps in {normal_path}.")
-
-    cleaned = []
-    for i, frame_path in enumerate(frame_paths):
-        normal_img = cv2.imread(normal_paths[i], cv2.IMREAD_UNCHANGED)
-        img = cv2.imread(frame_path, cv2.IMREAD_UNCHANGED)
-        if img is None or normal_img is None:
-            raise RuntimeError(f"Frame {i} or normal map {i} load failed.")
-        # alpha 채널 추가
-        if img.shape[2] == 3:
-            b, g, r = cv2.split(img)
-            alpha = np.ones(b.shape, dtype=b.dtype) * 255
-            img = cv2.merge((b, g, r, alpha))
-        # 검은 픽셀 투명화
-        black_mask = np.all(normal_img[:, :, :3] < 10, axis=2)
-        img[black_mask, 3] = 0
-        cv2.imwrite(frame_path, img)
-        cleaned.append(img)
-    return cleaned
-
 
 def load_images_from_dir(dir_path, max_frames):
     parent_dir, img_path = os.path.split(dir_path)
