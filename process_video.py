@@ -25,7 +25,7 @@ OUTPUT_PATH       = "camera_orbit_multiobject_upscaled.mp4"
 # **여기서 CAMERA_HEIGHT, RADIUS를 리스트로 정의합니다.**
 # (각 리스트의 길이는 동일해야 합니다.)
 RADIUS_LIST        = [7.0, 8.0, 9.0]      # 예시: 3가지 반경
-CAMERA_HEIGHT_LIST = [2.0, 5.0, 8.0]      # 예시: 3가지 높이
+CAMERA_HEIGHT_LIST = [2.0, 8.0, 10.0]      # 예시: 3가지 높이
 # ---------------------------------------------------
 
 def get_refined_list(lst):
