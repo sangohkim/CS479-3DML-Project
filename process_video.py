@@ -16,7 +16,7 @@ BUFFER_DURATION   = 1.0                  # 시작/끝 버퍼 지속 시간(초)
 
 BG_PATH           = "grass.jpg"          # 바닥 텍스처 이미지 경로
 BG_Y              = 0                    # 바닥 평면의 y 좌표
-BG_LEN            = 5                    # 바닥 평면의 크기 (± BG_LEN)
+BG_LEN            = 5.8                    # 바닥 평면의 크기 (± BG_LEN)
 
 ENABLE_BG_CUT     = True
 OUTPUT_PATH       = "camera_orbit_multiobject_upscaled.mp4"
@@ -24,8 +24,8 @@ OUTPUT_PATH       = "camera_orbit_multiobject_upscaled.mp4"
 # ---------------------------------------------------
 # **여기서 CAMERA_HEIGHT, RADIUS를 리스트로 정의합니다.**
 # (각 리스트의 길이는 동일해야 합니다.)
-RADIUS_LIST        = [7.0, 8.0, 9.0]      # 예시: 3가지 반경
-CAMERA_HEIGHT_LIST = [2.0, 8.0, 10.0]      # 예시: 3가지 높이
+RADIUS_LIST        = [7.0, 8.0]      # 예시: 3가지 반경
+CAMERA_HEIGHT_LIST = [3.0, 5.0]      # 예시: 3가지 높이
 # ---------------------------------------------------
 
 def get_refined_list(lst):
@@ -131,13 +131,13 @@ def main():
     # 각 객체별 정보를 딕셔너리 리스트로 구성
     objects = [
         # Scarecrow
-        {'position': np.array([1.0, BG_Y, 1.0]), 'images': frames_list[0], 'base_overlay_size': 1600},
+        {'position': np.array([0.0, BG_Y, 0.0]), 'images': frames_list[0], 'base_overlay_size': 4000},
         # Boy
-        {'position': np.array([1.0, BG_Y, 2.3]), 'images': frames_list[1], 'base_overlay_size': 850},
-        # Castle
-        {'position': np.array([-1.0, BG_Y, -1.0]), 'images': frames_list[2], 'base_overlay_size': 4000},
+        {'position': np.array([0.0, BG_Y, 3]), 'images': frames_list[1], 'base_overlay_size': 2500},
+        # # Castle
+        # {'position': np.array([-1.0, BG_Y, -1.0]), 'images': frames_list[2], 'base_overlay_size': 4000},
         # Dog
-        {'position': np.array([2.0, BG_Y, 1.5]), 'images': frames_list[3], 'base_overlay_size': 600},
+        {'position': np.array([1.5, BG_Y, -2.5]), 'images': frames_list[3], 'base_overlay_size': 1500},
     ]
 
     # 배경 이미지 로드 및 리사이즈
@@ -227,7 +227,7 @@ def main():
         writer.write(f)
     writer.release()
 
-    print(f"✅ 모든 구간을 이어붙인 최종 비디오를 저장했습니다: {OUTPUT_PATH}")
+    print(f"✅ Video saved: {OUTPUT_PATH}")
 
 
 if __name__ == '__main__':
