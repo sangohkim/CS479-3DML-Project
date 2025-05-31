@@ -19,7 +19,7 @@ BUFFER_DURATION = 1.0          # 시작/끝 버퍼 지속 시간(초)
 
 BG_PATH = "grass.jpg"          # 바닥 텍스처 이미지 경로
 BG_Y = 0                       # 바닥 평면의 y 좌표
-BG_LEN = 4.6
+BG_LEN = 4
 
 ENABLE_BG_CUT = True
 OUTPUT_PATH = "camera_orbit_multiobject_upscaled.mp4"
@@ -194,7 +194,8 @@ def main():
         out_frames.append(frame)
 
     buf = int(FPS * BUFFER_DURATION)
-    frames_buf = [out_frames[0]] * buf + out_frames + [out_frames[-1]] * buf
+    # frames_buf = [out_frames[0]] * buf + out_frames + [out_frames[-1]] * buf
+    frames_buf = out_frames
     writer = cv2.VideoWriter(
         OUTPUT_PATH,
         cv2.VideoWriter_fourcc(*'mp4v'),

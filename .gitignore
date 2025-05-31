@@ -4,6 +4,7 @@ animate-124/
 frame*
 *frames/
 data/
+outputs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
