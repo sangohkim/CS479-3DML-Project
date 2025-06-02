@@ -25,7 +25,7 @@ OUTPUT_PATH       = "camera_orbit_multiobject_upscaled.mp4"
 # **여기서 CAMERA_HEIGHT, RADIUS를 리스트로 정의합니다.**
 # (각 리스트의 길이는 동일해야 합니다.)
 RADIUS_LIST        = [8.0]      # 예시: 2가지 반경
-CAMERA_HEIGHT_LIST = [5.0]      # 예시: 2가지 높이
+CAMERA_HEIGHT_LIST = [2.0]      # 예시: 2가지 높이
 # ---------------------------------------------------
 
 def get_refined_list(lst):
@@ -148,7 +148,7 @@ def main():
     # 배경 이미지 로드 및 리사이즈
     w0, h0 = VIDEO_SIZE
     bg = cv2.imread(BG_PATH, cv2.IMREAD_COLOR)
-    # bg = cv2.resize(bg, (BG_LEN * 2, BG_LEN * 2), interpolation=cv2.INTER_CUBIC)
+    bg = cv2.resize(bg, (BG_LEN * 2, BG_LEN * 2), interpolation=cv2.INTER_CUBIC)
 
     # 카메라 Intrinsics (동일하게 사용)
     focal = 0.7 * w0
@@ -185,7 +185,7 @@ def main():
             H_inv = np.linalg.inv(H)
 
             # (2-3) 바닥 이미지를 H로 warp
-            bg_warped = cv2.warpPerspective(bg, H @ np.array([[1, 0, -BG_LEN / 2], [0, 1, -BG_LEN / 2], [0, 0, 1]]), (w0, h0))
+            bg_warped = cv2.warpPerspective(bg, H @ np.array([[1, 0, -BG_LEN], [0, 1, -BG_LEN], [0, 0, 1]]), (w0, h0))
 
             # (2-4) 깊이(Z_c) 테스트를 위한 마스크 생성
             #  1) 이미지 픽셀 (u, v, 1) 을 모아서 (3 x N) 배열로 만든 뒤
