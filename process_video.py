@@ -16,7 +16,7 @@ BUFFER_DURATION   = 1.0                  # 시작/끝 버퍼 지속 시간(초)
 
 BG_PATH           = "grass.jpg"          # 바닥 텍스처 이미지 경로
 BG_Y              = 0                    # 바닥 평면의 y 좌표
-BG_LEN            = 5.8                    # 바닥 평면의 크기 (± BG_LEN)
+BG_LEN            = 4                    # 바닥 평면의 크기 (± BG_LEN)
 
 ENABLE_BG_CUT     = True
 OUTPUT_PATH       = "camera_orbit_multiobject_upscaled.mp4"
@@ -24,8 +24,8 @@ OUTPUT_PATH       = "camera_orbit_multiobject_upscaled.mp4"
 # ---------------------------------------------------
 # **여기서 CAMERA_HEIGHT, RADIUS를 리스트로 정의합니다.**
 # (각 리스트의 길이는 동일해야 합니다.)
-RADIUS_LIST        = [7.0, 8.0]      # 예시: 3가지 반경
-CAMERA_HEIGHT_LIST = [3.0, 5.0]      # 예시: 3가지 높이
+RADIUS_LIST        = [4.0, 5.0]      # 예시: 3가지 반경
+CAMERA_HEIGHT_LIST = [0.5, 1.0]      # 예시: 3가지 높이
 # ---------------------------------------------------
 
 def get_refined_list(lst):
@@ -83,6 +83,8 @@ def generate_orbit_camera_poses(radius, num_views, height):
 def project_point(K, extrinsic, point3D):
     pc = extrinsic[:,:3] @ point3D + extrinsic[:,3]
     proj = K @ pc
+    if proj[2] < 0:
+        return None
     return (proj[:2] / proj[2]).astype(np.int32)
 
 def get_scaled_overlay(image, distance, base_distance, base_size):
@@ -97,7 +99,27 @@ def compute_ground_homography(K, extrinsic, bg_size, w, h):
         [ bg_size, BG_Y,  bg_size], [-bg_size, BG_Y,  bg_size]
     ])
     pts2d = [project_point(K, extrinsic, pt) for pt in pts3d]
-    pts2d.sort(key=lambda x: (x[1], x[0]))
+    none_indices = [i for i, pt in enumerate(pts2d) if pt is None]
+    none_count = len(none_indices)
+    if none_count == 2:
+        pts2d = [pt for i, pt in enumerate(pts2d) if i not in none_indices]
+        pts2d += [np.array([0, h]), np.array([w, h])]
+    elif none_count == 1:
+        pts2d_tmp = [pt for i, pt in enumerate(pts2d) if i not in none_indices]
+        pts2d_tmp.sort(key=lambda x: (x[0], x[1]))
+        vect = (pts2d_tmp[0] - pts2d_tmp[1]) + (pts2d_tmp[2] - pts2d_tmp[1])
+        none_point = pts2d_tmp[1] + vect * 10
+        pts2d = pts2d_tmp + [none_point]
+        print(pts2d)
+    elif none_count == 4:
+        raise RuntimeError("모든 점이 투영되지 않았습니다. 카메라 위치를 확인하세요.")
+
+    top2 = list(sorted(pts2d, key=lambda x: x[1]))[:2]
+    top2.sort(key=lambda x: x[0])
+    bottom2 = list(sorted(pts2d, key=lambda x: x[1]))[2:]
+    bottom2.sort(key=lambda x: x[0])
+    pts2d = top2 + bottom2
+
     pts = np.array(pts2d, dtype=np.float32)
     tl, tr, bl, br = pts
     dst = np.array([[0,0],[w,0],[0,h],[w,h]], dtype=np.float32)
@@ -131,13 +153,13 @@ def main():
     # 각 객체별 정보를 딕셔너리 리스트로 구성
     objects = [
         # Scarecrow
-        {'position': np.array([0.0, BG_Y, 0.0]), 'images': frames_list[0], 'base_overlay_size': 4000},
+        {'position': np.array([0.0, BG_Y, 0.0]), 'images': frames_list[0], 'base_overlay_size': 1024},
         # Boy
-        {'position': np.array([0.0, BG_Y, 3]), 'images': frames_list[1], 'base_overlay_size': 2500},
+        {'position': np.array([0.0, BG_Y, 1]), 'images': frames_list[1], 'base_overlay_size': 512},
         # # Castle
         # {'position': np.array([-1.0, BG_Y, -1.0]), 'images': frames_list[2], 'base_overlay_size': 4000},
         # Dog
-        {'position': np.array([1.5, BG_Y, -2.5]), 'images': frames_list[3], 'base_overlay_size': 1500},
+        {'position': np.array([1, BG_Y, -2]), 'images': frames_list[3], 'base_overlay_size': 512},
     ]
 
     # 배경 이미지 로드 및 리사이즈
@@ -176,19 +198,19 @@ def main():
 
             # 객체별 렌더링 리스트 작성 (거리순으로 depth 정렬)
             render_list = []
-            for obj in objects:
-                dist = np.linalg.norm(C - obj['position'])
-                p2d = project_point(K, extrinsic, obj['position'])
-                overlay, sz = get_scaled_overlay(
-                    obj['images'][idx],
-                    dist,
-                    base_distance=1.0,
-                    base_size=obj['base_overlay_size']
-                )
-                x, y = p2d - sz // 2
-                # 화면 밖으로 나가지 않도록 검사
-                if 0 <= x <= w0 - sz and 0 <= y <= h0 - sz:
-                    render_list.append((dist, overlay, sz, x, y))
+            # for obj in objects:
+            #     dist = np.linalg.norm(C - obj['position'])
+            #     p2d = project_point(K, extrinsic, obj['position'])
+            #     overlay, sz = get_scaled_overlay(
+            #         obj['images'][idx],
+            #         dist,
+            #         base_distance=1.0,
+            #         base_size=obj['base_overlay_size']
+            #     )
+            #     x, y = p2d - sz // 2
+            #     # 화면 밖으로 나가지 않도록 검사
+            #     if 0 <= x <= w0 - sz and 0 <= y <= h0 - sz:
+            #         render_list.append((dist, overlay, sz, x, y))
 
             # 알파 블렌딩 (가장 먼 것부터 가까운 것 순으로 그리기)
             for _, ov, sz, x, y in sorted(render_list, key=lambda x: x[0], reverse=True):
