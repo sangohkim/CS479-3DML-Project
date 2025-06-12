@@ -1,4 +1,5 @@
 # CS479-3DML-Project
+![Image](https://github.com/user-attachments/assets/a6b3746b-a8b2-4203-8ac8-ee6771c03ba6)
 
 ## Steps to reproduce
 
